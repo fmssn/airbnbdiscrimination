@@ -1,0 +1,206 @@
+df = pd.read_csv('20160213_data/main_data.csv', na_values=[r'\N', 'Null'], sep=';')
+
+# Price NA adjustment
+df['price'] = df.price.apply(lambda x: np.NaN if x==-1 else x)
+
+# Making guest_race and guest_gender binary variables
+df['guest_black'] = df.guest_race.apply(lambda x: 1 if x == "black" else 0)
+df['guest_female'] = df.guest_gender.apply(lambda x: 1 if x == "female" else 0)
+df['guest_male'] = df.guest_gender.apply(lambda x: 1 if x == "male" else 0)
+
+# Variable for clustered standard errors used by the authors
+df['name_by_city'] = df['guest_first_name'] + df['city']
+df['name_by_city'] = df.groupby(['name_by_city']).ngroup() + 2
+
+# Binary variable for host race and gender
+binaryrace_df = pd.get_dummies(df['host_race'])
+for race in ['black', 'white', 'hisp', 'asian', 'mult']:
+    heading = str('host_race_'+ race)
+    df[heading] = binaryrace_df[race]
+    
+binarygender_df = pd.get_dummies(df['host_gender'])
+for gender in ['F', 'FF', 'M', 'MM', 'MF']:
+    heading = str('host_gender_'+ gender)
+    df[heading] = binarygender_df[gender]
+
+df['host_gender_same_sex'] = df.host_gender_MM.apply(lambda x: 1 if x == 1 else 0)
+df['host_gender_same_sex'] = df.host_gender_FF.apply(lambda x: 1 if x == 1 else 0)
+
+# Categorical host age variable
+df['host_age_cat'] = (
+    np.select(
+        condlist=[
+            [x in ['young', 'young/UU', 'UU/young', 'young/NA', 'NA/young'] for x in df['host_age']] ,
+            [x in ['middle/young', 'young/middle'] for x in df['host_age']],
+            [x in ['middle', 'middle/UU', 'UU/middle', 'middle/NA', 'NA/middle'] for x in df['host_age']],
+            [x in ['middle/old', 'old/middle'] for x in df['host_age']],
+            [x in ['old', 'old/UU', 'UU/young', 'old/NA', 'NA/old'] for x in df['host_age']]                 
+                 ],
+        choicelist=[0,1,2,3,4],
+        default='NA'))
+
+# Binary variable for other host characteristics
+df['ten_reviews'] = df.number_of_reviews.apply(lambda x: True if x >= 10 else False)
+df['five_star_property'] = df.apt_rating.apply(lambda x: True if x == 5 else False)
+df['multiple_listings'] = df.number_of_listings.apply(lambda x: True if x > 1 else False)
+df['shared_property'] = df.property_setup.apply(lambda x: True if x == 'Private Room' or x == 'Shared Room' else False)
+df['shared_bathroom'] = df.apply(lambda x: True if x.shared_property == 1 or x.bathrooms < 1.5 else False, axis=1)
+df['has_cleaning_fee'] = df.cleaning_fee.apply(lambda x: True if x != '.'else False)
+df['strict_cancellation'] = df.cancellation_policy.apply(lambda x: True if x == 'Strict' else False)
+df['young'] = df.host_age_cat.apply(lambda x: True if x == 0 else False)
+df['middle'] = df.host_age_cat.apply(lambda x: True if x == 1 or x == 2 else False)
+df['old'] = df.host_age_cat.apply(lambda x: True if x == 3 or x == 4 else False)
+df['pricey']= df.price.rank(pct=True).apply(lambda x: True if x >= 0.9 else False)
+df['price_median']= df.price.rank(pct=True).apply(lambda x: True if x > 0.5 else False)
+df['log_price'] = df.price.apply(lambda x: math.log(x) if x!=np.NaN else x)
+
+# Variable for the proportion of population in the census tract
+df['white_proportion'] = df.whites / df.population
+df['black_proportion'] = df.blacks / df.population
+df['asian_proportion'] = df.asians / df.population
+df['hispanic_proportion'] = df.hispanics / df.population
+
+# Variable that tracks number of properties withing a census tract
+sum_df = df.groupby(['census_tract']).sum()
+df['tract_listings'] = df['census_tract'].map(sum_df['latitude'])
+df['log_tract_listings'] = df.tract_listings.apply(lambda x: math.log(x) if not(np.isnan(x)) else x)
+
+# Simplifying the categories of host responses
+host_response_labels = {
+    0: "No or unavailable",
+    1: "Yes",
+    2: "Request for more info (Can you verify? How many people?)",
+    3: "No, unless you verify",
+    4: "Yes, if you verify/give more info",
+    5: "Offers a different place",
+    6: "Offers Lower Price If You Book Now",
+    7: "Asks for higher price",
+    8: "Yes if stay is extended",
+    9: "Check back later for definitive answer",
+    10: "I will get back to you",
+    11: "Unsure right now",
+    12: "Only used for events",
+    13: "Confused (our date error)",
+    14: "Message not sent",
+    -1: "No response"
+    }
+relabel_dict = {
+    1:4, 4:2, 6:3, 8:4, 5:5, 7:6, 2:7, -1:9, 3:10, 0:11, 9:8, 10:8, 11:8,
+    12:np.NaN, 13:np.NaN, 14:np.NaN
+}
+df['simplified_host_response'] = df['host_response'].map(relabel_dict)
+
+simplified_host_response_labels = {
+    1: "Yes",
+    2: "Yes, but requests more info",
+    3: "Yes, with lower price if booked now",
+    4: "Yes, if guest extends stay",
+    5: "Yes, but in different propery",
+    6: "Yes, at a higher price",
+    7: "Requests more information",
+    8: "Not sure or check later",
+    9: "No response",
+    10: "No, without more information",
+    11: "No",  
+    }
+
+graph_relabel_dict = {
+    1:1, 2:2, 3:2, 4:3, 5:2, 6:2, 7:4, 8:4, 9:3, 10:8, 11:5
+    }    
+graph_bins_labels = {
+    1: "Yes",
+    2: "Conditional Yes",
+    3: "No Response",
+    4: "Conditional No",
+    5: "No"
+    }
+df['graph_bins'] = df['simplified_host_response'].map(relabel_dict)    
+
+# Simplified variable for whether the host responded with yes or no
+yes_relabel_dict = {
+    -1:0, 0:0, 1:1, 2:0, 3:0, 4:1, 5:0, 6:1, 7:0, 8:0, 9:0, 10:0, 11:0, 12:0, 13:0, 14:np.NaN
+    }  
+df['yes'] = df['host_response'].map(yes_relabel_dict)    
+
+# Rename columns
+#col_labels = {
+#    "yes": "Positive Response",
+#    "guest_white": "Guest is White",
+#    "white_proportion": "Share of White Population in Census Tract",
+#    "black_proportion": "Share of Black Population in Census Tract",
+#    "asian_proportion": "Share of Asian Population in Census Tract",
+#    "hispanic_proportion": "Share of Hispanic Population in Census Tract",
+#    "bed_type": "Type of Bed",
+#    "number_guests": "Number of Guests",
+#    "bedrooms": "Number of Bedrooms",
+#    "bathrooms": "Number of Bathrooms",
+#    "cleaning_fee": "Cleaning Fee",
+#    "price": "Price",
+#    "log_price": "Log Price",
+#    "price_median": "Price Above Median",
+#    "pricey": "Price in Top Decile",
+#    "apt_rating": "Apartment's Star Rating",
+#    "verified_id": "Verified ID",
+#    "super_host": "Super Host",
+#    "guest_black": "Guest is African-American",
+#    "guest_female": "Female Guest",
+#    "guest_race_continuous": "Whiteness of Name",
+#    "host_race_black": "Host is African American",
+#    "host_race_white": "Host is White",
+#    "host_race_hisp": "Host is Hispanic",
+#    "host_race_asian": "Host is Asian",
+#    "host_gender_F": "Host is Female",
+#    "host_gender_M": "Host is Male",
+#    "host_gender_MF": "Host is an Opposite-Sex Couple",
+#    "host_gender_same_sex": "Host is a Same-Sex Couple",
+#    "ten_reviews": "Host has 10+ Reviews",
+#    "five_star_property": "Property has 5 Star Rating",
+#    "multiple_listings": "Host has Multiple Listings",
+#    "shared_property": "Shared Property",
+#    "shared_bathroom": "Shared Bathroom",
+#    "has_cleaning_fee": "Has a Cleaning Fee",
+#    "strict_cancellation": "Strict Cancellation Policy",
+#    "young": "Host Looks Young",
+#    "old": "Host Looks Old",
+#    "middle": "Host Looks Middle-Aged",
+#    "price": "Top Decile in Price",
+#    "log_price": "ln(Price)",
+#    "tract_listings": "Airbnb Listings per Census Tract",
+#    "new_number_of_listings": "Number of Listings"
+#}
+#df.rename(columns=col_labels, inplace=True)
+
+# Drop Tampa and Atlanta. Tampa and Atlanta requests were all shut down by Airbnb
+df = df[(df.city != "Tampa") & (df.city != "Atlanta")]
+
+# City dummy variable
+df['baltimore'] = df.city.apply(lambda x: True if x=="Baltimore" else False)
+df['dallas'] = df.city.apply(lambda x: True if x=="Dallas" else False)
+df['los_angeles'] = df.city.apply(lambda x: True if x=="Los-Angeles" else False)
+df['sl'] = df.city.apply(lambda x: True if x=="St-Louis" else False)
+df['dc'] = df.city.apply(lambda x: True if x=="Washington" else False)
+
+
+df_hosts = pd.io.stata.read_stata('20160213_data/hosts.dta')
+df = pd.merge(df, df_hosts)
+ 
+#col_labels  = {
+#    "any_black": "Host has at least one review from an African American guest",
+#    "prop_black": "Proportion of past guests who are African American",
+#    "raw_black": "Number of past guests who are African American"
+#    }
+#df.rename(columns=col_labels, inplace=True)
+
+#df['filled_september'] = df.up_not_available_september.apply(lambda x: True if x == 1 else False)
+#prediction = Probit(
+#    missing = 'drop',
+#    endog = np.asarray(df.filled_september, dtype=float), 
+#    exog  = np.asarray(df[['host_race_black', 'host_race_asian', 'host_race_hisp',
+#        'host_gender_M', 'log_price', 'bedrooms', 'shared_bathroom',
+#        'shared_property', 'number_of_reviews', 'young',
+#        'multiple_listings', 'white_proportion', 'log_tract_listings',
+#        'baltimore', 'dallas', 'los_angeles', 'sl']], dtype=float)
+#    ).fit()
+
+
+df.head()
